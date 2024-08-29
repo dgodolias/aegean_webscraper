@@ -15,6 +15,10 @@ import threading
 # Global lock for shared resource
 lock = threading.Lock()
 processed_destinations = []
+global_min_prices = []
+
+THREADS_NUM = 10
+
 
 def init_driver(thread_id):
     chrome_options = Options()
@@ -42,7 +46,7 @@ def set_departure_from_athens(driver):
         from_field.click()
         from_field.clear()
         from_field.send_keys("Athens")
-        time.sleep(2)
+        time.sleep(1)
         
         suggestions = WebDriverWait(driver, 10).until(
             EC.visibility_of_all_elements_located((By.CSS_SELECTOR, 'ul.ui-menu.ui-widget.ui-widget-content.ui-autocomplete.ui-front li.ui-menu-item'))
@@ -61,14 +65,14 @@ def get_dropdown_div_html(driver):
     try:
         to_field = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, 'AirportToSelect')))
         to_field.click()
-        time.sleep(2)
+        time.sleep(1)
 
         dropdown_div = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, 'div.ddList.autocomplete.mCustomScrollbar'))
         )
 
         driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", dropdown_div)
-        time.sleep(2)
+        time.sleep(1)
         
         return dropdown_div.get_attribute('outerHTML')
 
@@ -136,7 +140,7 @@ def scrape_aegean_places(thread_id):
     set_departure_from_athens(driver)
     dropdown_div_html = get_dropdown_div_html(driver)
 
-    destinations = ["Abu Dhabi (AUH)", "Amsterdam (AMS)", "Barcelona (BCN)", "Berlin (TXL)", "Brussels (BRU)"]
+    destinations = get_destinations(dropdown_div_html)
 
     print(f"Thread {thread_id} - Available destinations:")
     for place in destinations:
@@ -145,7 +149,7 @@ def scrape_aegean_places(thread_id):
 
     month_order = get_month_order()
 
-    min_prices = []
+    local_min_prices = []
 
     for place in destinations:
         with lock:
@@ -185,7 +189,7 @@ def scrape_aegean_places(thread_id):
             if combined_fares:
                 min_price = min(combined_fares.values())
                 min_months = [month for month, price in combined_fares.items() if price == min_price]
-                min_prices.append((place, '/'.join(min_months), min_price))
+                local_min_prices.append((place, '/'.join(min_months), min_price))
 
             print(f"Thread {thread_id} - Finished processing {place}")
 
@@ -196,11 +200,9 @@ def scrape_aegean_places(thread_id):
 
         print(f"Thread {thread_id} - Completed all steps for {place}")
 
-    min_prices.sort(key=lambda x: x[2])
-
-    print(f"\nThread {thread_id} - Sorted Destinations by Minimum Price:")
-    for place, months, price in min_prices:
-        print(f"{place} {months} {price:.2f}€")
+    # Merge local min prices with the global list
+    with lock:
+        global_min_prices.extend(local_min_prices)
 
     print(f"Thread {thread_id} - All destinations processed, quitting driver...")
 
@@ -211,13 +213,20 @@ def scrape_aegean_places(thread_id):
 
 def main():
     threads = []
-    for i in range(3):  # Create 3 threads
+    for i in range(THREADS_NUM):  # Create 3 threads
         thread = threading.Thread(target=scrape_aegean_places, args=(i+1,))
         threads.append(thread)
         thread.start()
 
     for thread in threads:
         thread.join()
+
+    # Print the combined results once all threads are done
+    global_min_prices.sort(key=lambda x: x[2])
+
+    print("\nFinal Sorted Destinations by Minimum Price:")
+    for place, months, price in global_min_prices:
+        print(f"{place} {months} {price:.2f}€")
 
 if __name__ == "__main__":
     main()
