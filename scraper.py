@@ -1,4 +1,6 @@
 import time
+import os
+import tempfile
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -8,58 +10,66 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import traceback
 from datetime import datetime
+import threading
 
-def init_driver():
+# Global lock for shared resource
+lock = threading.Lock()
+processed_destinations = []
+
+def init_driver(thread_id):
     chrome_options = Options()
-    profile_path = r'C:\Users\User\AppData\Local\Google\Chrome\User Data\Default'
-    chrome_options.add_argument(f"user-data-dir={profile_path}")
+    
+    # Use a pre-configured user data directory if available, or create a new one.
+    user_data_dir = os.path.join(tempfile.gettempdir(), f"chrome_profile_{thread_id}")
+    chrome_options.add_argument(f"user-data-dir={user_data_dir}")
+    
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("start-maximized")
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--no-first-run")
+    chrome_options.add_argument("--no-default-browser-check")
+    chrome_options.add_argument("--disable-popup-blocking")
+    chrome_options.add_argument("--disable-infobars")
+    chrome_options.add_argument("--disable-notifications")
+
     return webdriver.Chrome(options=chrome_options)
 
 def set_departure_from_athens(driver):
     try:
         from_field = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, 'AirportFromSelect')))
-        from_field.click()  # Click the field to ensure it's active
+        from_field.click()
         from_field.clear()
-        from_field.send_keys("Athens")  # Start typing 'Athens' to trigger the dropdown
-        time.sleep(2)  # Allow time for autocomplete suggestions to appear
+        from_field.send_keys("Athens")
+        time.sleep(2)
         
-        # Wait for the autocomplete suggestions to be visible
         suggestions = WebDriverWait(driver, 10).until(
             EC.visibility_of_all_elements_located((By.CSS_SELECTOR, 'ul.ui-menu.ui-widget.ui-widget-content.ui-autocomplete.ui-front li.ui-menu-item'))
         )
         
-        # Loop through the visible suggestions and click the correct one
         for suggestion in suggestions:
             if "Athens (ATH)" in suggestion.text:
-                suggestion.click()  # Click the exact suggestion
+                suggestion.click()
                 break
-        time.sleep(0.5)  # A brief pause after selecting from the suggestions
+        time.sleep(0.5)
     except Exception as e:
         print(f"Error setting departure from Athens: {e}")
         traceback.print_exc()
 
 def get_dropdown_div_html(driver):
     try:
-        # Click the "To" field to trigger the dropdown
         to_field = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, 'AirportToSelect')))
         to_field.click()
-        time.sleep(2)  # Wait for dropdown to load
+        time.sleep(2)
 
-        # Locate the container holding the list of destinations
         dropdown_div = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, 'div.ddList.autocomplete.mCustomScrollbar'))
         )
 
-        # Scroll to the bottom of the dropdown to ensure all items are loaded
         driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", dropdown_div)
-        time.sleep(2)  # Wait for all items to load
-
-        # Return the outer HTML of the dropdown div
+        time.sleep(2)
+        
         return dropdown_div.get_attribute('outerHTML')
 
     except Exception as e:
@@ -69,7 +79,6 @@ def get_dropdown_div_html(driver):
 
 def get_fares_html(driver):
     try:
-        # Get the outbound and inbound fare HTML content after search
         outbound_html = driver.find_element(By.CSS_SELECTOR, 'ul[ng-model="Outbound"]').get_attribute('outerHTML')
         inbound_html = driver.find_element(By.CSS_SELECTOR, 'ul[ng-model="Inbound"]').get_attribute('outerHTML')
         return outbound_html, inbound_html
@@ -80,13 +89,8 @@ def get_fares_html(driver):
 
 def extract_fares_from_html(fares_html):
     try:
-        # Parse the HTML using BeautifulSoup
         soup = BeautifulSoup(fares_html, 'html.parser')
-        
-        # Find all the list items (li elements) in the fares list
         li_elements = soup.find_all('li')
-        
-        # Extract the month and price from each li element
         fares = {}
         for li in li_elements:
             month = li.find('p', class_='month').text.strip()
@@ -105,117 +109,115 @@ def extract_fares_from_html(fares_html):
         return {}
 
 def get_month_order():
-    # Get the current month as an integer
     current_month = datetime.now().month
-
-    # List of all months in order
     months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-    # Rotate the list so that the current month comes first
     month_order = months[current_month - 1:] + months[:current_month - 1]
     
     return month_order
 
 def get_destinations(dropdown_div_html):
     try:
-        # Parse the HTML using BeautifulSoup
         soup = BeautifulSoup(dropdown_div_html, 'html.parser')
-        
-        # Find all the list items (li elements) in the dropdown
         li_elements = soup.find_all('li', class_='ui-menu-item')
-        
-        # Extract the text from each li element
         destinations = [li.text.strip() for li in li_elements if li.text.strip()]
-        
         return destinations
     
     except Exception as e:
         print(f"Error extracting destinations from HTML: {e}")
         return []
 
-def scrape_aegean_places():
-    driver = init_driver()
+def scrape_aegean_places(thread_id):
+    print(f"Thread {thread_id} started.")
+    driver = init_driver(thread_id)
     url = 'https://en.aegeanair.com/flight-deals/low-fare-calendar/'
     driver.get(url)
-    time.sleep(2)  # Ensure the page is fully loaded
+    time.sleep(2)
 
     set_departure_from_athens(driver)
     dropdown_div_html = get_dropdown_div_html(driver)
 
-    # Extracting the destinations list after scrolling the dropdown
-    destinations = get_destinations(dropdown_div_html)
+    destinations = ["Abu Dhabi (AUH)", "Amsterdam (AMS)", "Barcelona (BCN)", "Berlin (TXL)", "Brussels (BRU)"]
 
-    # Print all the destinations
-    print("Available destinations:")
+    print(f"Thread {thread_id} - Available destinations:")
     for place in destinations:
         print(place)
     print("------")
 
-    month_order = get_month_order()  # Get the month order based on the current month
+    month_order = get_month_order()
 
-    min_prices = []  # List to hold minimum price info for each destination
+    min_prices = []
 
     for place in destinations:
-        print(f"Starting to process {place}...")
+        with lock:
+            if place in processed_destinations:
+                print(f"Thread {thread_id} - Skipping {place} as it has already been processed.")
+                continue  # Skip if another thread already processed this destination
+
+            # Mark this destination as being processed
+            processed_destinations.append(place)
+
+        print(f"Thread {thread_id} - Starting to process {place}...")
 
         try:
             input_field = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, 'AirportToSelect')))
             input_field.clear()
             input_field.send_keys(place)
-            time.sleep(2)  # Increased delay to ensure dropdown interaction is complete
+            time.sleep(2)
             input_field.send_keys(Keys.RETURN)
 
-            print(f"Entered {place} and triggered search")
+            print(f"Thread {thread_id} - Entered {place} and triggered search")
 
             search_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, 'lfc_mask_searchbutton')))
             driver.execute_script("arguments[0].click();", search_button)
-            time.sleep(5)  # Wait for search results to process
+            time.sleep(5)
 
-            # Get the outbound and inbound fares HTML
             outbound_html, inbound_html = get_fares_html(driver)
 
-            # Extract the fares
             outbound_fares = extract_fares_from_html(outbound_html)
             inbound_fares = extract_fares_from_html(inbound_html)
 
-            # Find the common months between outbound and inbound fares
             common_months = set(outbound_fares.keys()).intersection(inbound_fares.keys())
 
-            # Combine the fares for the common months
             combined_fares = {}
             for month in common_months:
                 combined_fares[month] = outbound_fares[month] + inbound_fares[month]
 
-            # Find the minimum price and corresponding months
             if combined_fares:
                 min_price = min(combined_fares.values())
                 min_months = [month for month, price in combined_fares.items() if price == min_price]
                 min_prices.append((place, '/'.join(min_months), min_price))
 
-            print(f"Finished processing {place}")
+            print(f"Thread {thread_id} - Finished processing {place}")
 
         except Exception as e:
-            print(f"Failed to process {place}: {e}")
+            print(f"Thread {thread_id} - Failed to process {place}: {e}")
             traceback.print_exc()
             continue
 
-        print(f"Completed all steps for {place}")
+        print(f"Thread {thread_id} - Completed all steps for {place}")
 
-    # Sort the destinations by the minimum price
     min_prices.sort(key=lambda x: x[2])
 
-    # Print the sorted destinations
-    print("\nSorted Destinations by Minimum Price:")
+    print(f"\nThread {thread_id} - Sorted Destinations by Minimum Price:")
     for place, months, price in min_prices:
         print(f"{place} {months} {price:.2f}€")
 
-    print("All destinations processed, quitting driver...")
+    print(f"Thread {thread_id} - All destinations processed, quitting driver...")
 
     try:
         driver.quit()
     except Exception as e:
-        print(f"Error quitting driver: {e}")
+        print(f"Thread {thread_id} - Error quitting driver: {e}")
 
+def main():
+    threads = []
+    for i in range(3):  # Create 3 threads
+        thread = threading.Thread(target=scrape_aegean_places, args=(i+1,))
+        threads.append(thread)
+        thread.start()
+
+    for thread in threads:
+        thread.join()
 
 if __name__ == "__main__":
-    scrape_aegean_places()
+    main()
