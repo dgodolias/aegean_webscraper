@@ -19,6 +19,8 @@ global_min_prices = []
 
 THREADS_NUM = 10
 
+# User-specified months, defaults to an empty list if not specified
+user_specified_months = []
 
 def init_driver(thread_id):
     chrome_options = Options()
@@ -27,6 +29,7 @@ def init_driver(thread_id):
     user_data_dir = os.path.join(tempfile.gettempdir(), f"chrome_profile_{thread_id}")
     chrome_options.add_argument(f"user-data-dir={user_data_dir}")
     
+    chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("start-maximized")
     chrome_options.add_argument("--disable-extensions")
@@ -38,17 +41,26 @@ def init_driver(thread_id):
     chrome_options.add_argument("--disable-infobars")
     chrome_options.add_argument("--disable-notifications")
 
+    # Add a normal user agent string
+    chrome_options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    )
+
+    # Add this option to handle rendering differences in headless mode
+    chrome_options.add_argument("--window-size=1920,1080")
+
     return webdriver.Chrome(options=chrome_options)
+
 
 def set_departure_from_athens(driver):
     try:
-        from_field = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, 'AirportFromSelect')))
+        from_field = WebDriverWait(driver, 20).until(EC.visibility_of_element_located((By.ID, 'AirportFromSelect')))
         from_field.click()
         from_field.clear()
         from_field.send_keys("Athens")
-        time.sleep(1)
+        time.sleep(2)
         
-        suggestions = WebDriverWait(driver, 10).until(
+        suggestions = WebDriverWait(driver, 20).until(
             EC.visibility_of_all_elements_located((By.CSS_SELECTOR, 'ul.ui-menu.ui-widget.ui-widget-content.ui-autocomplete.ui-front li.ui-menu-item'))
         )
         
@@ -56,10 +68,11 @@ def set_departure_from_athens(driver):
             if "Athens (ATH)" in suggestion.text:
                 suggestion.click()
                 break
-        time.sleep(0.5)
+        time.sleep(1)
     except Exception as e:
         print(f"Error setting departure from Athens: {e}")
         traceback.print_exc()
+
 
 def get_dropdown_div_html(driver):
     try:
@@ -182,6 +195,10 @@ def scrape_aegean_places(thread_id):
 
             common_months = set(outbound_fares.keys()).intersection(inbound_fares.keys())
 
+            # Filter by user-specified months if provided
+            if user_specified_months:
+                common_months = {month for month in common_months if month in user_specified_months}
+
             combined_fares = {}
             for month in common_months:
                 combined_fares[month] = outbound_fares[month] + inbound_fares[month]
@@ -212,8 +229,15 @@ def scrape_aegean_places(thread_id):
         print(f"Thread {thread_id} - Error quitting driver: {e}")
 
 def main():
+    global user_specified_months
+    
+    # Get user input for specific months
+    months_input = input("Enter specific months (e.g., May Aug) or leave blank for all months: ").strip()
+    if months_input:
+        user_specified_months = months_input.split()
+
     threads = []
-    for i in range(THREADS_NUM):  # Create 3 threads
+    for i in range(THREADS_NUM):
         thread = threading.Thread(target=scrape_aegean_places, args=(i+1,))
         threads.append(thread)
         thread.start()
